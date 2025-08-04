@@ -1,0 +1,94 @@
+# -----------------
+# Python
+# -----------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+test-results/
+
+# Type checker
+mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# -----------------
+# Project specific
+# -----------------
+# PDFs downloaded
+pdfs/
+# Output folders
+output/
+uploads/
+tmp/
+*.db
+
+# Environment variables
+.env
+*.env
+
+# Supabase
+.supabase/
+supabase/functions/*/node_modules/
+supabase/.branches
+supabase/.functions-build
+supabase/.temp
+
+# -----------------
+# OS / Editor
+# -----------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+.idea/
+.vscode/
+*.swp
+*~
+
+# -----------------
+# Node (if using Supabase functions with JS)
+# -----------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
