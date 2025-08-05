@@ -24,7 +24,7 @@ def fetch_course_stats(course_code: str) -> dict:
 def get_course_exams(request: Request, course_code: str):
     exams = (
         supabase.table("exams")
-        .select("id, course_code, exam_date, pdf_url")
+        .select("id, course_code, exam_date, pdf_url, exam_name")
         .eq("course_code", course_code)
         .order("exam_date", desc=True)
         .execute()
@@ -75,6 +75,7 @@ def get_course_exams(request: Request, course_code: str):
                 "course_code": exam["course_code"],
                 "exam_date": exam_date_str,
                 "pdf_url": exam["pdf_url"],
+                "exam_name": exam["exam_name"],
                 "has_solution": solution_map.get(exam["id"], False),
                 "statistics": stat_entry["grades"],
                 "pass_rate": stat_entry["pass_rate"],
