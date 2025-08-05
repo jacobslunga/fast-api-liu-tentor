@@ -22,7 +22,7 @@ def fetch_course_stats(course_code: str) -> dict:
 
 @router.get("/courses/{course_code}/exams")
 @limiter.limit("30/minute")
-def get_course_exams(_: Request, course_code: str):
+def get_course_exams(request: Request, course_code: str):
     exams = (
         supabase.table("exams")
         .select("id, course_code, exam_date, pdf_url, exam_name")
@@ -96,7 +96,7 @@ def get_course_exams(_: Request, course_code: str):
 
 @router.get("/exams/{exam_id}")
 @limiter.limit("30/minute")
-def get_exam_with_solutions(_: Request, exam_id: int):
+def get_exam_with_solutions(request: Request, exam_id: int):
     exam = (
         supabase.table("exams")
         .select("id, course_code, exam_date, pdf_url")
@@ -123,7 +123,7 @@ def get_exam_with_solutions(_: Request, exam_id: int):
 @router.post("/uploads")
 @limiter.limit("30/minute")
 def upload_document(
-    _: Request, course_code: str, file_type: str, pdf_url: str, uploaded_by: str
+    request: Request, course_code: str, file_type: str, pdf_url: str, uploaded_by: str
 ):
     if file_type not in ["EXAM", "SOLUTION"]:
         raise HTTPException(status_code=400, detail="Invalid file type")
@@ -149,7 +149,7 @@ def upload_document(
 
 
 @router.post("/uploads/{upload_id}/approve")
-def approve_upload(_: Request, upload_id: int):
+def approve_upload(request: Request, upload_id: int):
     pending = (
         supabase.table("pending_uploads")
         .select("*")
@@ -206,7 +206,7 @@ def approve_upload(_: Request, upload_id: int):
 
 
 @router.delete("/uploads/{upload_id}")
-def reject_upload(_: Request, upload_id: int):
+def reject_upload(request: Request, upload_id: int):
     pending = (
         supabase.table("pending_uploads")
         .select("*")
