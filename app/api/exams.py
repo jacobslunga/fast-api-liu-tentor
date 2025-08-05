@@ -81,6 +81,9 @@ def get_course_exams(request: Request, course_code: str):
             }
         )
 
+    # Sort: exams with solutions first, then by date (newest first)
+    exam_list.sort(key=lambda x: (not x["has_solution"], x["exam_date"]), reverse=True)
+
     return {
         "course_code": course_code,
         "course_name_swe": course_name_swe,
