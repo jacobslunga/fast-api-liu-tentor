@@ -29,7 +29,9 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.include_router(exams.router, prefix="/api", tags=["Exams"])
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 @limiter.limit("30/minute")
 def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return {
+        "message": "Welcome to the LiU Tentor Backend API. Visit https://api.liutentor.se/docs for API documentation."
+    }
