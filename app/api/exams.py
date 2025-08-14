@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, Request
 from app.db.supabase import supabase
 from app.core.rate_limiter import limiter
 import requests
-from datetime import datetime
 import os
 
 router = APIRouter()
@@ -59,7 +58,12 @@ def get_course_exams(request: Request, course_code: str):
             date = module.get("date", "").split("T")[0]
             grades = {g["grade"]: g["quantity"] for g in module.get("grades", [])}
             total = sum(grades.values())
-            passed = grades.get("3", 0) + grades.get("4", 0) + grades.get("5", 0)
+            passed = (
+                grades.get("3", 0)
+                + grades.get("4", 0)
+                + grades.get("5", 0)
+                + grades.get("G", 0)
+            )
             pass_rate = round((passed / total * 100), 1) if total > 0 else 0.0
 
             stats_map[date] = {"grades": grades, "pass_rate": pass_rate}

@@ -28,6 +28,7 @@ def is_facit(name: str) -> bool:
         "lösningsförslag",
         "facit",
         "solution",
+        "sol",
         "losning",
         "lsn",
         "losnings",
