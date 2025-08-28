@@ -4,6 +4,7 @@ import base64
 import os
 import math
 import re
+import unicodedata
 from datetime import datetime
 
 load_dotenv()
@@ -17,23 +18,26 @@ os.makedirs(SAVE_PATH, exist_ok=True)
 
 BATCH_SIZE = 500
 
-# ---------- Helper Functions ---------- #
+
+def _strip_diacritics(s: str) -> str:
+    n = unicodedata.normalize("NFKD", s)
+    return "".join(ch for ch in n if not unicodedata.combining(ch))
 
 
 def is_facit(name: str) -> bool:
-    normalized_name = name.lower()
+    normalized_name = _strip_diacritics(name).lower()
     is_facit_pattern = re.compile(r"^l\d|^l_\d{8}")
 
     facit_keywords = [
-        "lösningsförslag",
+        "losningsforslag",
         "facit",
         "solution",
         "sol",
         "losning",
         "lsn",
         "losnings",
-        "lösnings",
-        "lösning",
+        "losnings",
+        "losning",
         "tenlsg",
         "lf",
         "_l",
@@ -104,9 +108,6 @@ def extract_date_from_name(name: str):
     return None
 
 
-# ---------- Main Function ---------- #
-
-
 def download_pdfs():
     total = supabase.table("tentor").select("id", count="exact").execute().count
     pages = math.ceil(total / BATCH_SIZE)
@@ -135,7 +136,9 @@ def download_pdfs():
             if not doc:
                 continue
 
-            date = extract_date_from_name(tenta["tenta_namn"])
+            date = extract_date_from_name(
+                tenta["tenta_namn"].replace(tenta["kurskod"], "")
+            )
             if not date:
                 print(f"Skipping (no date): {tenta['tenta_namn']}")
                 continue

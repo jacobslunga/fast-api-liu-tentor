@@ -25,7 +25,7 @@ def normalize_date(date_str):
 
 def fetch_all_exams():
     """Fetch all exams from Supabase."""
-    print("🔄 Fetching exams...")
+    print("Fetching exams...")
     exams = []
     page_size = 1000
     offset = 0
@@ -43,7 +43,7 @@ def fetch_all_exams():
         exams.extend(data)
         offset += page_size
 
-    print(f"✅ Found {len(exams)} exams")
+    print(f"Found {len(exams)} exams")
     return exams
 
 
@@ -54,7 +54,7 @@ def fetch_course_modules(course_code):
         resp.raise_for_status()
         return resp.json().get("modules", [])
     except requests.RequestException:
-        print(f"⚠️ Failed to fetch modules for {course_code}")
+        print(f"Failed to fetch modules for {course_code}")
         return []
 
 
@@ -68,7 +68,7 @@ def update_exam_names():
         courses.setdefault(exam["course_code"], []).append(exam)
 
     for course_code, course_exams in courses.items():
-        print(f"\n📚 Processing course {course_code}...")
+        print(f"\nProcessing course {course_code}...")
         modules = fetch_course_modules(course_code)
 
         for exam in course_exams:
@@ -89,11 +89,11 @@ def update_exam_names():
                     "id", exam["id"]
                 ).execute()
                 updated_count += 1
-                print(f"✅ Updated exam {exam['id']} → {new_name}")
+                print(f"Updated exam {exam['id']} → {new_name}")
             elif matched:
-                print(f"ℹ️ Already correct: {exam['exam_name']}")
+                print(f"Already correct: {exam['exam_name']}")
 
-    print(f"\n🎉 Done! Updated {updated_count} exams.")
+    print(f"\nDone! Updated {updated_count} exams.")
 
 
 if __name__ == "__main__":

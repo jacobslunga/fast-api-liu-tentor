@@ -20,7 +20,7 @@ def fetch_course_stats(course_code: str) -> dict:
 
 
 @router.get("/courses/{course_code}/exams")
-@limiter.limit("30/minute")
+@limiter.limit("60/minute")
 def get_course_exams(request: Request, course_code: str):
     exams = (
         supabase.table("exams")
@@ -99,7 +99,7 @@ def get_course_exams(request: Request, course_code: str):
 
 
 @router.get("/exams/{exam_id}")
-@limiter.limit("30/minute")
+@limiter.limit("60/minute")
 def get_exam_with_solutions(request: Request, exam_id: int):
     exam = (
         supabase.table("exams")
