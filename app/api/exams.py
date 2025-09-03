@@ -98,6 +98,19 @@ def get_course_exams(request: Request, course_code: str):
     }
 
 
+@router.get("/exams/courses/{query}")
+@limiter.limit("200/minute")
+def get_course_codes(request: Request, query: str):
+    """
+    TODO:
+    We need to map each course name to it's course code.
+    Eg. Linjär Algebra - TATA24
+        Databaser      - TDDD37
+    """
+
+    return {"message": "Hello"}
+
+
 @router.get("/exams/{exam_id}")
 @limiter.limit("200/minute")
 def get_exam_with_solutions(request: Request, exam_id: int):
