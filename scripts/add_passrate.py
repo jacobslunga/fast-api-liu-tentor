@@ -7,141 +7,156 @@ from supabase import create_client, Client
 from tqdm.asyncio import tqdm_asyncio
 
 # --- Configuration ---
-EXTERNAL_API_BASE = "https://liutentor.lukasabbe.com/api/courses"
+COURSE_LIST_API = "https://liutentor.lukasabbe.com/api/courses"
+STATS_API = "https://ysektionen.se/student/tentastatistik/exam_stats/"
 PASSING_GRADES = {"3", "4", "5", "G"}
 CONCURRENCY_LIMIT = 10
-PAGE_SIZE = 1000  # How many rows to fetch from Supabase at a time
+
+VALID_EXAM_PREFIXES = ("TEN", "KTR", "DUG", "DAT")
+VALID_EXAM_NAMES = ("Skriftlig tentamen", "Skriftlig examination", "Kontrollskrivning")
 
 # --- Helper Functions ---
 
 
-async def fetch_course_stats(client: httpx.AsyncClient, course_code: str) -> dict:
-    """Fetches the full statistics object for a course asynchronously."""
-    api_url = f"{EXTERNAL_API_BASE}/{course_code}"
+async def fetch_all_course_codes(client: httpx.AsyncClient) -> list[str]:
+    """Fetches the master list of all course codes."""
     try:
-        resp = await client.get(api_url, timeout=30)
-        if resp.status_code != 200:
-            # This is now a non-critical warning, as some courses may not exist in the external API
-            # print(f"API returned status {resp.status_code} for {course_code}. Skipping.")
-            return {}
+        resp = await client.get(COURSE_LIST_API, timeout=30)
+        resp.raise_for_status()
         return resp.json()
     except httpx.RequestError as e:
-        print(f"Network error fetching stats for {course_code}: {e}")
-        return {}
+        print(f"FATAL: Could not fetch course code list: {e}")
+        return []
+    except Exception as e:
+        print(f"FATAL: An error occurred while parsing the course code list: {e}")
+        return []
 
 
-async def process_course(
+async def fetch_and_process_course(
     supabase: Client,
     http_client: httpx.AsyncClient,
     course_code: str,
-    exams: list,
     semaphore: asyncio.Semaphore,
 ):
-    """Processes all exams for a single course code, with enhanced debugging output."""
+    """
+    Fetches stats for a single course, transforms the data, and upserts it into Supabase.
+    """
     async with semaphore:
-        stats_data = await fetch_course_stats(http_client, course_code)
+        # 1. Fetch the raw stats data
+        params = {"course_code": course_code}
+        try:
+            resp = await http_client.get(STATS_API, params=params, timeout=45)
+            if resp.status_code != 200:
+                return
+            api_data = resp.json()
+            if not api_data.get("success"):
+                return
+        except httpx.RequestError:
+            return
 
-        # Create a lookup map for faster access: { 'exam_date': {stats_obj} }
-        stats_map = {}
-        if stats_data and "modules" in stats_data:
-            for module in stats_data.get("modules", []):
-                date = (
-                    module.get("date", "").strip().split("T")[0]
-                )  # .strip() added for safety
-                grades = {g["grade"]: g["quantity"] for g in module.get("grades", [])}
+        # 2. Transform the transposed API data into a standard format
+        unpivoted_stats = defaultdict(lambda: defaultdict(int))
+        for exam_code, exam_details in api_data.get("exams", {}).items():
+            # --- FIX: HANDLE POTENTIAL `None` VALUE FOR EXAM_NAME ---
+            # If `exam_details.get("name")` returns None, default to an empty string
+            exam_name = exam_details.get("name") or ""
+            # --- END OF FIX ---
 
-                total_students = sum(grades.values())
-                passed_count = sum(grades.get(g, 0) for g in PASSING_GRADES)
+            is_valid_prefix = exam_code.startswith(VALID_EXAM_PREFIXES)
+            is_valid_name = any(
+                valid_name in exam_name for valid_name in VALID_EXAM_NAMES
+            )
 
-                pass_rate = (
-                    round((passed_count / total_students * 100), 1)
-                    if total_students > 0
-                    else 0.0
-                )
-                stats_map[date] = {"statistics": grades, "pass_rate": pass_rate}
+            if not (is_valid_prefix or is_valid_name):
+                continue
 
-        # Update each exam in Supabase for the current course
-        for exam in exams:
-            exam_date = exam["exam_date"].strip()
-            if exam_date in stats_map:
-                update_payload = stats_map[exam_date]
-                try:
-                    supabase.table("exams").update(update_payload).eq(
-                        "id", exam["id"]
-                    ).execute()
-                except Exception as e:
-                    print(f"  ERROR: Failed to update exam ID {exam['id']}: {e}")
+            dates_list = exam_details.get("dates", [])
+            grade_data_list = exam_details.get("data", [])
+            for grade_obj in grade_data_list:
+                grade_name = grade_obj.get("name")
+                quantities = grade_obj.get("data", [])
+                for i, quantity in enumerate(quantities):
+                    if i < len(dates_list):
+                        date = dates_list[i]
+                        unpivoted_stats[date][grade_name] += quantity
+                        unpivoted_stats[date]["_exam_code"] = exam_code
+                        unpivoted_stats[date]["_exam_name"] = exam_details.get(
+                            "name", ""
+                        )
+
+        # 3. Build the list of rows to be inserted into Supabase
+        rows_to_insert = []
+        for date, grades in unpivoted_stats.items():
+            total_students = sum(
+                v for k, v in grades.items() if not str(k).startswith("_")
+            )
+            passed_count = sum(grades.get(g, 0) for g in PASSING_GRADES)
+            pass_rate = (
+                round((passed_count / total_students * 100), 1)
+                if total_students > 0
+                else 0.0
+            )
+
+            exam_code = grades.pop("_exam_code", None)
+            exam_name = grades.pop("_exam_name", None)
+
+            rows_to_insert.append(
+                {
+                    "course_code": course_code,
+                    "exam_date": date,
+                    "statistics": dict(grades),
+                    "pass_rate": pass_rate,
+                    "course_name_swe": api_data.get("course_name"),
+                    "course_name_eng": api_data.get("course_name_eng"),
+                    "exam_code": exam_code,
+                    "exam_name": exam_name,
+                }
+            )
+
+        # 4. Upsert the data into the new exam_stats table
+        if rows_to_insert:
+            try:
+                supabase.table("exam_stats").upsert(rows_to_insert).execute()
+            except Exception as e:
+                print(f"  ERROR: Failed to upsert data for {course_code}: {e}")
 
 
 async def main():
-    """Main function to run the backfill script."""
-    print("Starting exam statistics backfill script...")
+    """Main function to run the population script."""
+    print("Starting script to populate the `exam_stats` table...")
 
     load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
 
     if not supabase_url or not supabase_key:
-        print("Error: SUPABASE_URL and SUPABASE_KEY must be set in a .env file.")
+        print(
+            "Error: SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in a .env file."
+        )
         return
 
     supabase: Client = create_client(supabase_url, supabase_key)
 
-    # --- FIX: PAGINATE THE RESULTS TO FETCH ALL EXAMS ---
-    print("Fetching ALL exams from Supabase using pagination...")
-    all_exams = []
-    current_page = 0
-    while True:
-        try:
-            start_index = current_page * PAGE_SIZE
-            end_index = start_index + PAGE_SIZE - 1
-
-            response = (
-                supabase.table("exams")
-                .select("id, course_code, exam_date")
-                .range(start_index, end_index)
-                .execute()
-            )
-
-            page_data = response.data
-            all_exams.extend(page_data)
-
-            # If a page returns fewer than PAGE_SIZE results, it's the last page
-            if len(page_data) < PAGE_SIZE:
-                break
-
-            current_page += 1
-
-        except Exception as e:
-            print(f"Error fetching exams from Supabase: {e}")
-            return
-    # --- END OF FIX ---
-
-    if not all_exams:
-        print("No exams found in the database.")
-        return
-
-    print(f"Found {len(all_exams)} total exams to process.")
-
-    courses = defaultdict(list)
-    for exam in all_exams:
-        courses[exam["course_code"]].append(exam)
-
-    print(f"Grouped exams into {len(courses)} unique course codes.")
-
-    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-    print(
-        f"Fetching statistics and updating database (Concurrency limit: {CONCURRENCY_LIMIT})..."
-    )
     async with httpx.AsyncClient() as http_client:
+        all_course_codes = await fetch_all_course_codes(http_client)
+        if not all_course_codes:
+            print("No course codes found. Exiting.")
+            return
+
+        print(f"Found {len(all_course_codes)} total course codes to process.")
+
+        semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+        print(
+            f"Fetching stats and populating database (Concurrency: {CONCURRENCY_LIMIT})..."
+        )
+
         tasks = [
-            process_course(supabase, http_client, code, exam_list, semaphore)
-            for code, exam_list in courses.items()
+            fetch_and_process_course(supabase, http_client, code, semaphore)
+            for code in all_course_codes
         ]
-        # We can remove the debugging print statements now
         await tqdm_asyncio.gather(*tasks, desc="Processing Courses")
 
-    print("\nBackfill script finished successfully!")
+    print("\nStats population script finished successfully!")
 
 
 if __name__ == "__main__":

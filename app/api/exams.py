@@ -26,30 +26,45 @@ async def fetch_course_stats(course_code: str) -> dict:
 @router.get("/courses/{course_code}/exams")
 @limiter.limit("200/minute")
 async def get_course_exams(request: Request, course_code: str):
-    exams_data = (
+    """
+    Fetches all exam documents for a course and enriches them with statistics
+    from the `exam_stats` table.
+    """
+
+    exams_response = (
         supabase.table("exams")
-        .select(
-            "id, course_code, exam_date, pdf_url, exam_name, statistics, pass_rate, solutions(exam_id)"
-        )
+        .select("id, course_code, exam_date, pdf_url, exam_name, solutions(exam_id)")
         .eq("course_code", course_code)
         .order("exam_date", desc=True)
         .execute()
         .data
     )
-    course_data = (
-        supabase.table("courses")
-        .select("course_name_swe, course_name_eng")
+
+    if not exams_response:
+        raise HTTPException(
+            status_code=404, detail="No exam documents found for this course"
+        )
+
+    stats_response = (
+        supabase.table("exam_stats")
+        .select("exam_date, statistics, pass_rate, course_name_swe, course_name_eng")
         .eq("course_code", course_code)
-        .single()
         .execute()
         .data
     )
 
-    if not exams_data:
-        raise HTTPException(status_code=404, detail="No exams found for this course")
+    stats_map = {
+        stat["exam_date"]: {
+            "statistics": stat.get("statistics"),
+            "pass_rate": stat.get("pass_rate"),
+        }
+        for stat in stats_response
+    }
 
     exam_list = []
-    for exam in exams_data:
+    for exam in exams_response:
+        exam_stats = stats_map.get(exam["exam_date"], {})
+
         exam_list.append(
             {
                 "id": exam["id"],
@@ -57,18 +72,23 @@ async def get_course_exams(request: Request, course_code: str):
                 "exam_date": exam["exam_date"],
                 "pdf_url": exam["pdf_url"],
                 "exam_name": exam["exam_name"],
-                "statistics": exam["statistics"],
-                "pass_rate": exam["pass_rate"],
                 "has_solution": bool(exam.get("solutions")),
+                "statistics": exam_stats.get("statistics"),
+                "pass_rate": exam_stats.get("pass_rate"),
             }
         )
 
-    exam_list.sort(key=lambda x: (not x["has_solution"], x["exam_date"]), reverse=True)
+    course_name_swe = (
+        stats_response[0].get("course_name_swe", "") if stats_response else ""
+    )
+    course_name_eng = (
+        stats_response[0].get("course_name_eng", "") if stats_response else ""
+    )
 
     return {
         "course_code": course_code,
-        "course_name_swe": course_data["course_name_swe"],
-        "course_name_eng": course_data["course_name_eng"],
+        "course_name_swe": course_name_swe,
+        "course_name_eng": course_name_eng,
         "exams": exam_list,
     }
 
