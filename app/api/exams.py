@@ -1,124 +1,136 @@
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from app.db.supabase import supabase
 from app.core.rate_limiter import limiter
-import requests
-import os
 
 router = APIRouter()
 
 EXTERNAL_API_BASE = "https://liutentor.lukasabbe.com/api/courses"
-url = os.getenv("SUPABASE_URL")
 
 
-def fetch_course_stats(course_code: str) -> dict:
-    """Fetches course statistics from the external API."""
+async def fetch_course_stats(course_code: str) -> dict:
+    """
+    Fetches the full statistics object for a course from the external API.
+    This is the potentially slow network call.
+    """
     api_url = f"{EXTERNAL_API_BASE}/{course_code}"
-
-    resp = requests.get(api_url, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(api_url, timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.RequestError:
+        return {}
 
 
 @router.get("/courses/{course_code}/exams")
 @limiter.limit("200/minute")
-def get_course_exams(request: Request, course_code: str):
-    exams = (
+async def get_course_exams(request: Request, course_code: str):
+    exams_data = (
         supabase.table("exams")
-        .select("id, course_code, exam_date, pdf_url, exam_name")
+        .select(
+            "id, course_code, exam_date, pdf_url, exam_name, statistics, pass_rate, solutions(exam_id)"
+        )
         .eq("course_code", course_code)
         .order("exam_date", desc=True)
         .execute()
         .data
     )
-
-    if not exams:
-        raise HTTPException(status_code=404, detail="No exams found")
-
-    exam_ids = [exam["id"] for exam in exams]
-    solutions = (
-        supabase.table("solutions")
-        .select("exam_id")
-        .in_("exam_id", exam_ids)
+    course_data = (
+        supabase.table("courses")
+        .select("course_name_swe, course_name_eng")
+        .eq("course_code", course_code)
+        .single()
         .execute()
         .data
     )
 
-    solution_map = {sol["exam_id"]: True for sol in solutions}
-
-    course_name_swe = ""
-    course_name_eng = ""
-    stats_map = {}
-
-    try:
-        stats_data = fetch_course_stats(course_code)
-        course_name_swe = stats_data.get("courseNameSwe", "")
-        course_name_eng = stats_data.get("courseNameEng", "")
-
-        for module in stats_data.get("modules", []):
-            date = module.get("date", "").split("T")[0]
-            grades = {g["grade"]: g["quantity"] for g in module.get("grades", [])}
-            total = sum(grades.values())
-            passed = (
-                grades.get("3", 0)
-                + grades.get("4", 0)
-                + grades.get("5", 0)
-                + grades.get("G", 0)
-            )
-            pass_rate = round((passed / total * 100), 1) if total > 0 else 0.0
-
-            stats_map[date] = {"grades": grades, "pass_rate": pass_rate}
-    except requests.RequestException:
-        pass
+    if not exams_data:
+        raise HTTPException(status_code=404, detail="No exams found for this course")
 
     exam_list = []
-    for exam in exams:
-        exam_date_str = exam["exam_date"]
-        stat_entry = stats_map.get(exam_date_str, {"grades": {}, "pass_rate": 0.0})
+    for exam in exams_data:
         exam_list.append(
             {
                 "id": exam["id"],
                 "course_code": exam["course_code"],
-                "exam_date": exam_date_str,
+                "exam_date": exam["exam_date"],
                 "pdf_url": exam["pdf_url"],
                 "exam_name": exam["exam_name"],
-                "has_solution": solution_map.get(exam["id"], False),
-                "statistics": stat_entry["grades"],
-                "pass_rate": stat_entry["pass_rate"],
+                "statistics": exam["statistics"],
+                "pass_rate": exam["pass_rate"],
+                "has_solution": bool(exam.get("solutions")),
             }
         )
 
-    # Sort: exams with solutions first, then by date (newest first)
     exam_list.sort(key=lambda x: (not x["has_solution"], x["exam_date"]), reverse=True)
+
+    return {
+        "course_code": course_code,
+        "course_name_swe": course_data["course_name_swe"],
+        "course_name_eng": course_data["course_name_eng"],
+        "exams": exam_list,
+    }
+
+
+@router.get("/courses/{course_code}/details")
+@limiter.limit("200/minute")
+async def get_course_details(request: Request, course_code: str):
+    stats_data = await fetch_course_stats(course_code)
+    course_name_swe = stats_data.get("courseNameSwe", "")
+    course_name_eng = stats_data.get("courseNameEng", "")
 
     return {
         "course_code": course_code,
         "course_name_swe": course_name_swe,
         "course_name_eng": course_name_eng,
-        "exams": exam_list,
     }
+
+
+@router.get("/courses/{course_code}/stats/{exam_date}")
+@limiter.limit("200/minute")
+async def get_exam_statistics(request: Request, course_code: str, exam_date: str):
+    stats_data = await fetch_course_stats(course_code)
+
+    if not stats_data:
+        return {"grades": {}, "pass_rate": 0.0}
+
+    for module in stats_data.get("modules", []):
+        if module.get("date", "").startswith(exam_date):
+            grades = {g["grade"]: g["quantity"] for g in module.get("grades", [])}
+            total_students = sum(grades.values())
+            passed_count = sum(grades.get(g, 0) for g in ["3", "4", "5", "G"])
+
+            pass_rate = (
+                round((passed_count / total_students * 100), 1)
+                if total_students > 0
+                else 0.0
+            )
+
+            return {"grades": grades, "pass_rate": pass_rate}
+
+    return {"grades": {}, "pass_rate": 0.0}
 
 
 @router.get("/exams/{exam_id}")
 @limiter.limit("200/minute")
-def get_exam_with_solutions(request: Request, exam_id: int):
-    exam = (
+async def get_exam_with_solutions(request: Request, exam_id: int):
+    """
+    Retrieves a single exam and its associated solutions in one database call.
+    """
+    response = (
         supabase.table("exams")
-        .select("id, course_code, exam_date, pdf_url")
+        .select("id, course_code, exam_date, pdf_url, solutions(*)")
         .eq("id", exam_id)
         .single()
         .execute()
         .data
     )
 
-    if not exam:
+    if not response:
         raise HTTPException(status_code=404, detail="Exam not found")
 
-    solutions = (
-        supabase.table("solutions")
-        .select("id, exam_id, pdf_url")
-        .eq("exam_id", exam_id)
-        .execute()
-        .data
-    )
+    solutions = response.pop("solutions", [])
+    exam = response
 
-    return {"exam": exam, "solutions": solutions or []}
+    return {"exam": exam, "solutions": solutions}
